@@ -2,7 +2,7 @@
 
 Arcaea Bundler is a tool to bundle or debundle content bundles of Arcaea.
 
-Related: [Arcaea-Server](https://github.com/Lost-MSth/Arcaea-server/graphs/traffic)
+Related: [Arcaea-Server](https://github.com/Lost-MSth/Arcaea-server)
 
 [README 中文](https://github.com/Lost-MSth/Arcaea-Bundler/blob/main/README.cn.md)
 

@@ -2,9 +2,9 @@
 
 Arcaea Bundler 是一个针对 Arcaea 内容捆绑包（热更新包）进行拆包和打包的工具
 
-相关项目：[Arcaea-Server](https://github.com/Lost-MSth/Arcaea-server/graphs/traffic)
+相关项目：[Arcaea-Server](https://github.com/Lost-MSth/Arcaea-server)
 
-[README English](https://github.com/Lost-MSth/Arcaea-Bundler/blob/main/README)
+[README English](https://github.com/Lost-MSth/Arcaea-Bundler/blob/main/README.md)
 
 ## 使用说明
 
