@@ -3,6 +3,7 @@ import hmac
 import json
 import logging
 import os
+import glob
 from base64 import b64decode, b64encode
 from hashlib import sha256
 from sys import version_info
@@ -157,21 +158,29 @@ class Debundler:
             raise ValueError(
                 f'Metadata file `{self.metadata_path}` is not a valid JSON file') from e
 
-    def parse(self):
-        added: 'list[dict]' = self.metadata.get('added', None)
+    def parse(self, is_rebuild: bool = False):
+        added: "list[dict]" = self.metadata.get("added", None)
+        removed: "list[str]" = self.metadata.get("removed", [])
+
         if added is None:
             raise ValueError(
-                f'Metadata file `{self.metadata_path}` does not contain `added` field')
+                f"Metadata file `{self.metadata_path}` does not contain `added` field"
+            )
 
         if not os.path.isdir(self.output_dir):
-            logger.info(f'Creating output directory `{self.output_dir}`')
+            logger.info(f"Creating output directory `{self.output_dir}`")
             os.makedirs(self.output_dir)
         else:
-            if os.listdir(self.output_dir):
+            if not is_rebuild and os.listdir(
+                self.output_dir
+            ):  # 重建目录时目录肯定不是空的
                 raise FileExistsError(
-                    f'Output directory `{self.output_dir}` is not empty')
-            logger.info(
-                f'Output directory `{self.output_dir}` exists and is empty')
+                    f"Output directory `{self.output_dir}` is not empty"
+                )
+            elif not is_rebuild:
+                logger.info(f"Output directory `{self.output_dir}` exists and is empty")
+            else:
+                logger.info(f"Rebuilding output directory `{self.output_dir}`")
 
         for file in added:
             FileParser.from_bundle(
@@ -182,7 +191,44 @@ class Debundler:
                 b64decode(file['sha256HashBase64Encoded'])
             ).to_file()
 
-        logger.info(f'Debundling completed: {len(added)} files written')
+        for file_path in removed:
+            full_path = os.path.join(self.output_dir, file_path)
+            if os.path.exists(full_path):
+                logger.debug(f"Removing file `{full_path}`")
+                os.remove(full_path)
+            else:
+                logger.warning(f"File `{full_path}` not found, cannot remove")
+
+        logger.info(
+            f"Debundling completed: {len(added)} files added, {len(removed)} files removed"
+        )
+        
+        
+    @staticmethod
+    def rebuild(input_pattern, metadata_pattern, output_dir):
+        """
+        根据 .cb 和 .json 文件重建原始文件
+        :param input_pattern: .cb 文件的路径模式
+        :param metadata_pattern: .json 文件的路径模式
+        :param output_dir: 输出目录
+        """
+        cb_files = sorted(glob.glob(input_pattern))
+        json_files = sorted(glob.glob(metadata_pattern))
+
+        if not cb_files or not json_files:
+            raise ValueError("No matching .cb or .json files found")
+
+        if len(cb_files) != len(json_files):
+            raise ValueError("Number of .cb and .json files does not match")
+
+        if not os.path.isdir(output_dir):
+            logger.info(f"Creating output directory `{output_dir}`")
+            os.makedirs(output_dir)
+
+        for cb_file, json_file in zip(cb_files, json_files):
+            debundler = Debundler(cb_file, json_file, output_dir)
+            debundler.parse(True)
+
 
 
 class Bundler:
@@ -447,6 +493,44 @@ def main():
     parser_bundle.add_argument('--verbose', '-V', action='store_true',
                                help='Enable verbose logging', default=False, dest='verbose_sub')
 
+    # rebuild
+    parser_rebuild = sub_parsers.add_parser(
+        "rebuild",
+        aliases=["r"],
+        help="Rebuild original files from .cb and .json files",
+        description="Rebuild original files from .cb and .json files",
+    )
+    parser_rebuild.add_argument(
+        "--input",
+        "-i",
+        type=str,
+        help="The input .cb file pattern (e.g., 'bundles/*.cb')",
+        required=True,
+    )
+    parser_rebuild.add_argument(
+        "--metadata",
+        "-m",
+        type=str,
+        help="The metadata .json file pattern (e.g., 'bundles/*.json')",
+        required=True,
+    )
+    parser_rebuild.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        help="The output directory",
+        default="rebuild_dir",
+    )
+
+    parser_rebuild.add_argument(
+        "--verbose",
+        "-V",
+        action="store_true",
+        help="Enable verbose logging",
+        default=False,
+        dest="verbose_sub",
+    )
+
     ns = parser.parse_args()
     # print(ns)
 
@@ -462,6 +546,8 @@ def main():
             x.set_version(ns.app_version, ns.bundle_version,
                           ns.previous_bundle_version)
             x.parse()
+        elif ns.action in ["rebuild", "r"]:
+            Debundler.rebuild(ns.input, ns.metadata, ns.output)
     except Exception as e:
         logger.error(e)
         if VERBOSE:
