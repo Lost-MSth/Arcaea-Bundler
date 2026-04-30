@@ -1,6 +1,7 @@
 import argparse
 import hmac
 import json
+import time
 import logging
 import os
 from base64 import b64decode, b64encode
@@ -72,6 +73,7 @@ class FileParser:
             'path': self.rel_path,
             'byteOffset': self.offset,
             'length': self.length,
+            'partIndex': 0,
             'sha256HashBase64Encoded': self.file_hash_base64
         }
 
@@ -192,6 +194,8 @@ class Bundler:
     PREV_BUNDLE_VERSION_KEY = 'previousVersionNumber'
     PATH_TO_HASH_KEY = 'pathToHash'
     PATH_TO_DETAILS_KEY = 'pathToDetails'
+    GENERATED_TIME_KEY = 'generatedUnixTimestamp'
+    TOTAL_PART_KEY = 'totalPartitions'
 
     PATH_TO_DETAILS_FILES = ['songs/unlocks',
                              'songs/packlist', 'songs/songlist']
@@ -377,7 +381,9 @@ class Bundler:
             'removed': removed,
             'added': added,
             self.PATH_TO_HASH_KEY: path_to_hash,
-            self.PATH_TO_DETAILS_KEY: self.get_path_to_details()
+            self.PATH_TO_DETAILS_KEY: self.get_path_to_details(),
+            self.GENERATED_TIME_KEY: int(time.time()),
+            self.TOTAL_PART_KEY: 1
         }
 
         logger.debug(f'Metadata BUNDLE_VERSION: {self.bundle_version}')
@@ -385,6 +391,10 @@ class Bundler:
             f'Metadata PREV_BUNDLE_VERSION: {self.prev_bundle_version}')
         logger.debug(f'Metadata APP_VERSION: {self.app_version}')
         logger.debug(f'Metadata UUID: {self.metadata["uuid"]}')
+        logger.debug(
+            f'Metadata GENERATED_TIME: {self.metadata["generatedUnixTimestamp"]}')
+        logger.debug(
+            f'Metadata TOTAL_PART: {self.metadata["totalPartitions"]}')
 
         json.dump(self.metadata, self.metadata_handler)
 
