@@ -10,7 +10,8 @@ from sys import version_info
 from traceback import print_exc
 
 if version_info < (3, 8):
-    cached_property = property
+    # from backports.cached_property import cached_property
+    cached_property = property  # 别问，问就是懒
 else:
     from functools import cached_property
 
@@ -18,6 +19,7 @@ else:
 APP_NAME = 'arcaea_bundler'
 APP_VERSION = '1.1'
 
+# Calvin S
 DESCRIPTION = '''
 ╔═╗┬─┐┌─┐┌─┐┌─┐┌─┐  ╔╗ ┬ ┬┌┐┌┌┬┐┬  ┌─┐┬─┐
 ╠═╣├┬┘│  ├─┤├┤ ├─┤  ╠╩╗│ ││││ │││  ├┤ ├┬┘
@@ -55,10 +57,11 @@ class FileParser:
     KEY = b'\xd4\x1f\xdb\xe37\xd0\x01h\x0c*MC\xaf\xe5p\xc7\x1f\xde\x85\xd8\xf3\xd4\xc4o7\x99\xc1\x8f\x1fP\x82w\xac\xa7\xabc2\x83q\x0c+\xb4\x1a\x07\x8e\xfb\xe7\xc1\x9c\xf0\x87\xa7\xe17u*\xb7X\x1c\x8d\x9c\x0e=\xe9'
 
     def __init__(self):
-        self.file_path: str = None
-        self.rel_path: str = None
+        self.file_path: str = None  # 绝对路径
+        self.rel_path: str = None  # 相对路径
         self.offset: int = None
         self.length: int = None
+
         self.part_index: int = 0
         self.data: bytes = None
 
@@ -100,7 +103,7 @@ class FileParser:
         bundle_handler.seek(offset)
         c.data = bundle_handler.read(length)
         logger.debug(
-            f'File `{file_abspath}` read from bundle: offset={offset}, length={length}, SHA256={b64encode(file_hash).decode()}')
+            f'File `{file_abspath}` read from bundle `{bundle_handler.name}`: offset={offset}, length={length}, SHA256={b64encode(file_hash).decode()}')
         if c.file_hash != file_hash:
             logger.debug(
                 f'File hash mismatch for `{file_abspath}`: expected={file_hash.hex()}, actual={c.file_hash.hex()}')
@@ -131,28 +134,50 @@ class Debundler:
     def __init__(self, file_path, metadata_path, output_dir):
         self.file_path = file_path
         self.metadata_path = metadata_path
+        self._metadata = None
         self.output_dir = output_dir
-        self.file_handler = None
-        self.file_handler = self._get_bundle_file_handler()
+        self.part_num = self._get_part_num()
+        self.file_handlers = self._get_bundle_file_handlers()
 
     def __del__(self):
-        if self.file_handler is not None:
-            self.file_handler.close()
+        for handler in self.file_handlers:
+            if handler is not None:
+                handler.close()
 
-    def _get_bundle_file_handler(self):
-        if not os.path.isfile(self.file_path):
-            raise FileNotFoundError(
-                f'Bundle file `{self.file_path}` not found')
-        return open(self.file_path, 'rb')
+    def _get_part_num(self):
+        num = self.metadata.get(Bundler.TOTAL_PART_KEY, None)
+        if num is None:
+            return -1
+        return num
+
+    def _get_bundle_file_handlers(self):
+        if self.part_num == -1:
+            if not os.path.isfile(self.file_path):
+                raise FileNotFoundError(
+                    f'Bundle file `{self.file_path}` not found')
+            return [open(self.file_path, 'rb')]
+
+        handlers = []
+        for i in range(self.part_num):
+            filename, ext = os.path.splitext(self.file_path)
+            part_file_path = f'{filename}_{i}{ext}'
+            if not os.path.isfile(part_file_path):
+                raise FileNotFoundError(
+                    f'Bundle part file `{part_file_path}` not found')
+            handlers.append(open(part_file_path, 'rb'))
+        return handlers
 
     @property
     def metadata(self) -> dict:
+        if self._metadata is not None:
+            return self._metadata
         if not os.path.isfile(self.metadata_path):
             raise FileNotFoundError(
                 f'Metadata file `{self.metadata_path}` not found')
         try:
             with open(self.metadata_path, 'rb') as f:
-                return json.load(f)
+                self._metadata = json.load(f)
+                return self._metadata
         except json.JSONDecodeError as e:
             raise ValueError(
                 f'Metadata file `{self.metadata_path}` is not a valid JSON file') from e
@@ -175,7 +200,7 @@ class Debundler:
 
         for file in added:
             FileParser.from_bundle(
-                self.file_handler,
+                self.file_handlers[file['partIndex']],
                 os.path.join(self.output_dir, file['path']),
                 file['byteOffset'],
                 file['length'],
@@ -200,7 +225,7 @@ class Bundler:
 
     OLD_METADATA_SUFFIX = '.oldjson'
 
-    def __init__(self, input_dir, output_file, output_metadata_file, old_metadata_relpath, max_part_size=100*1024*1024, enable_parts=False):
+    def __init__(self, input_dir, output_file, output_metadata_file, old_metadata_relpath, enable_parts=True, max_part_size=100*1024*1024):
         self.input_dir = input_dir
         self.output_file = output_file
         self.output_metadata_file = output_metadata_file
@@ -213,14 +238,15 @@ class Bundler:
 
         self.file_handlers = []
         self.metadata_handler = None
+        # self.file_handlers = self._get_bundle_file_handler()
         self.metadata_handler = self._get_metadata_file_handler()
 
         self.app_version = None
         self.bundle_version = None
         self.prev_bundle_version = None
 
-        self.prev_path_to_hash = {}
-        self.prev_path_to_details = {}
+        self.prev_path_to_hash = {}  # 用来检测文件变更，生成 add 和 remove
+        self.prev_path_to_details = {}  # 用来生成 metadata
 
         self.current_part_index = 0
         self.current_part_offset = 0
@@ -246,6 +272,12 @@ class Bundler:
                 fh.close()
         if self.metadata_handler is not None:
             self.metadata_handler.close()
+
+    def _get_file_handler(self, file_path):
+        if os.path.isfile(file_path):
+            raise FileExistsError(
+                f'Bundle file `{file_path}` already exists')
+        return open(file_path, 'wb')
 
     def _part_file_path(self, idx: int) -> str:
         x = os.path.splitext(self.output_file)
@@ -334,15 +366,18 @@ class Bundler:
         removed = []
         path_to_hash = {}
         total_bytes = 0
+        self.current_part_index = 0
+        self.current_part_offset = 0
 
-        count = [0, 0, 0, 0]
+        count = [0, 0, 0, 0]  # 0: added, 1: changed, 2: unchanged, 3: removed
+
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
+        os.makedirs(os.path.dirname(self.output_metadata_file), exist_ok=True)
 
         # Check first part file doesn't exist
         first_part = self._part_file_path(0)
-        if os.path.isfile(first_part):
-            raise FileExistsError(
-                f'Bundle file `{first_part}` already exists')
-        self.file_handlers.append(open(first_part, 'wb'))
+        self.file_handlers.append(self._get_file_handler(first_part))
 
         for root, dirs, files in os.walk(self.input_dir):
             for file in files:
@@ -351,17 +386,22 @@ class Bundler:
                 file_path = os.path.join(root, file)
                 rel_path = std_path(os.path.relpath(file_path, self.input_dir))
 
-                x = FileParser.from_file(file_path, rel_path, 0)
+                x = FileParser.from_file(
+                    file_path, rel_path, self.current_part_offset)
 
                 path_to_hash[rel_path] = x.file_hash_base64
 
                 prev_file_hash = self.prev_path_to_hash.get(rel_path, None)
 
                 if prev_file_hash is None:
+                    # added.append(x.to_dict())
+                    # self.file_handler.write(x.data)
                     needs_write = True
                     logger.debug(f'New file `{rel_path}` added')
                     count[0] += 1
                 elif x.file_hash_base64 != prev_file_hash:
+                    # added.append(x.to_dict())
+                    # self.file_handler.write(x.data)
                     needs_write = True
                     removed.append(rel_path)
                     logger.debug(f'File `{rel_path}` changed')
@@ -371,30 +411,29 @@ class Bundler:
                     count[2] += 1
                     continue
 
-                if needs_write:
-                    if self.enable_parts:
-                        # Check if we need a new part (skip if current part is empty)
-                        if self.current_part_offset > 0 and self.current_part_offset + x.length > self.max_part_size:
-                            self.current_part_index += 1
-                            self.current_part_offset = 0
-                            part_path = self._part_file_path(self.current_part_index)
-                            if os.path.isfile(part_path):
-                                raise FileExistsError(
-                                    f'Bundle file `{part_path}` already exists')
-                            self.file_handlers.append(open(part_path, 'wb'))
-                            logger.info(f'Starting new part: {part_path}')
+                if not needs_write:
+                    continue
+                if self.enable_parts:
+                    # Check if we need a new part (skip if current part is empty)
+                    if self.current_part_offset > 0 and self.current_part_offset + x.length > self.max_part_size:
+                        self.current_part_index += 1
+                        self.current_part_offset = 0
+                        x.offset = 0
+                        part_path = self._part_file_path(
+                            self.current_part_index)
+                        self.file_handlers.append(
+                            self._get_file_handler(part_path))
+                        logger.info(f'Starting new part: {part_path}')
 
-                        x.offset = self.current_part_offset
-                        x.part_index = self.current_part_index
-                        self.file_handlers[-1].write(x.data)
-                        self.current_part_offset += x.length
-                    else:
-                        x.offset = self.current_part_offset
-                        x.part_index = 0
-                        self.file_handlers[0].write(x.data)
-                        self.current_part_offset += x.length
-                    added.append(x.to_dict())
-                    total_bytes += x.length
+                    x.part_index = self.current_part_index
+                    self.file_handlers[-1].write(x.data)
+                else:
+                    x.part_index = 0
+                    self.file_handlers[0].write(x.data)
+
+                added.append(x.to_dict())
+                self.current_part_offset += x.length
+                total_bytes += x.length
 
         for i in self.prev_path_to_hash:
             if i not in path_to_hash:
@@ -431,10 +470,13 @@ class Bundler:
             f'Bundle metadata written to `{self.output_metadata_file}`')
 
         logger.info(
-            f'Bundle completed: {count[0]} added, {count[1]} changed, {count[2]} unchanged, {count[3]} removed, {self.current_part_index + 1} parts, {total_bytes} bytes ({bytes_format(total_bytes)})')
+            f'Bundle file written to `{self.output_file}`: {self.current_part_index + 1} parts, {total_bytes} bytes ({bytes_format(total_bytes)})')
 
         self.record_old_metadata()
         logger.info(f'Old metadata recorded to `{self.old_metadata_path}`')
+
+        logger.info(
+            f'Bundle completed: {count[0]} added, {count[1]} changed, {count[2]} unchanged, {count[3]} removed')
 
 
 def main():
@@ -448,17 +490,21 @@ def main():
     parser.add_argument('--verbose', '-V', action='store_true',
                         help='Enable verbose logging', default=False, dest='verbose')
 
-    parser_debundle = sub_parsers.add_parser('debundle', aliases=['d'], help='Debundle a file with metadata',
-                                             description='Debundle a file with metadata')
+    # debundler
+    parser_debundle = sub_parsers.add_parser('debundle', aliases=['d'], help='Debundle a file or files with metadata',
+                                             description=('Debundle a file or files with metadata.\n'
+                                             '''If the bundle are split into multiple parts, the input bundle files should be named as `<input>_0.cb`, `<input>_1.cb`, ...'''))
     parser_debundle.add_argument(
         '--input', '-i', type=str, help='The input bundle file to debundle', required=True)
     parser_debundle.add_argument(
         '--metadata', '-m', type=str, help='The metadata JSON file to use', required=True)
     parser_debundle.add_argument(
         '--output', '-o', type=str, help='The output directory; it must be empty or absent', default='output')
+
     parser_debundle.add_argument('--verbose', '-V', action='store_true',
                                  help='Enable verbose logging', default=False, dest='verbose_sub')
 
+    # bundler
     parser_bundle = sub_parsers.add_parser(
         'bundle', aliases=['b'], help='Bundle a directory', description='Bundle a directory')
     parser_bundle.add_argument(
@@ -469,8 +515,9 @@ def main():
         '--metadata', '-m', type=str, help='The output metadata JSON file name; if not given, it will have the same name with bundle file; suffix `.json` is fixed', default=None)
     parser_bundle.add_argument('--old_metadata', '-om', type=str,
                                help='The old metadata file name for incremental update (path relative to input directory; suffix must be `.oldjson`)', default='metadata')
-    parser_bundle.add_argument('-p', '--parts', action='store_true',
-                               help='Enable multi-part bundle splitting', default=False)
+
+    parser_bundle.add_argument('--disable_parts', '-dp', action='store_true',
+                               help='Disable multi-part bundle splitting', default=False)
     parser_bundle.add_argument('--max_part_size', type=int,
                                help='Max size per bundle part in bytes (default: 104857600 = 100MB)', default=100*1024*1024)
 
@@ -485,6 +532,7 @@ def main():
                                help='Enable verbose logging', default=False, dest='verbose_sub')
 
     ns = parser.parse_args()
+    # print(ns)
 
     VERBOSE = ns.verbose or ns.verbose_sub
     if VERBOSE:
@@ -494,7 +542,8 @@ def main():
             x = Debundler(ns.input, ns.metadata, ns.output)
             x.parse()
         elif ns.action in ['bundle', 'b']:
-            x = Bundler(ns.input, ns.output, ns.metadata, ns.old_metadata, ns.max_part_size, ns.parts)
+            x = Bundler(ns.input, ns.output, ns.metadata,
+                        ns.old_metadata, not ns.disable_parts, ns.max_part_size)
             x.set_version(ns.app_version, ns.bundle_version,
                           ns.previous_bundle_version)
             x.parse()
