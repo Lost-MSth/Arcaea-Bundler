@@ -17,7 +17,7 @@ else:
 
 
 APP_NAME = 'arcaea_bundler'
-APP_VERSION = '1.1'
+APP_VERSION = '1.1.1'
 
 # Calvin S
 DESCRIPTION = '''
@@ -379,61 +379,75 @@ class Bundler:
         first_part = self._part_file_path(0)
         self.file_handlers.append(self._get_file_handler(first_part))
 
+        processed_rel_paths = set()
+
+        def handle_file(file_path: str, rel_path: str) -> None:
+            nonlocal total_bytes
+
+            x = FileParser.from_file(
+                file_path, rel_path, self.current_part_offset)
+
+            path_to_hash[rel_path] = x.file_hash_base64
+
+            prev_file_hash = self.prev_path_to_hash.get(rel_path, None)
+
+            if prev_file_hash is None:
+                needs_write = True
+                logger.debug(f'New file `{rel_path}` added')
+                count[0] += 1
+            elif x.file_hash_base64 != prev_file_hash:
+                needs_write = True
+                removed.append(rel_path)
+                logger.debug(f'File `{rel_path}` changed')
+                count[1] += 1
+            else:
+                logger.debug(f'File `{rel_path}` unchanged')
+                count[2] += 1
+                return
+
+            if not needs_write:
+                return
+            if self.enable_parts:
+                # Check if we need a new part (skip if current part is empty)
+                if self.current_part_offset > 0 and self.current_part_offset + x.length > self.max_part_size:
+                    self.current_part_index += 1
+                    self.current_part_offset = 0
+                    x.offset = 0
+                    part_path = self._part_file_path(
+                        self.current_part_index)
+                    self.file_handlers.append(
+                        self._get_file_handler(part_path))
+                    logger.info(f'Starting new part: {part_path}')
+
+                x.part_index = self.current_part_index
+                self.file_handlers[-1].write(x.data)
+            else:
+                x.part_index = 0
+                self.file_handlers[0].write(x.data)
+
+            added.append(x.to_dict())
+            self.current_part_offset += x.length
+            total_bytes += x.length
+
+        # Ensure detail files are handled first, in list order
+        for rel_detail in self.PATH_TO_DETAILS_FILES:
+            rel_path = std_path(rel_detail)
+            file_path = os.path.normpath(
+                os.path.join(self.input_dir, rel_detail))
+            if not os.path.isfile(file_path):
+                raise FileNotFoundError(f'Detail file `{file_path}` not found')
+            handle_file(file_path, rel_path)
+            processed_rel_paths.add(rel_path)
+
         for root, dirs, files in os.walk(self.input_dir):
             for file in files:
                 if file.endswith(self.OLD_METADATA_SUFFIX):
                     continue
                 file_path = os.path.join(root, file)
                 rel_path = std_path(os.path.relpath(file_path, self.input_dir))
-
-                x = FileParser.from_file(
-                    file_path, rel_path, self.current_part_offset)
-
-                path_to_hash[rel_path] = x.file_hash_base64
-
-                prev_file_hash = self.prev_path_to_hash.get(rel_path, None)
-
-                if prev_file_hash is None:
-                    # added.append(x.to_dict())
-                    # self.file_handler.write(x.data)
-                    needs_write = True
-                    logger.debug(f'New file `{rel_path}` added')
-                    count[0] += 1
-                elif x.file_hash_base64 != prev_file_hash:
-                    # added.append(x.to_dict())
-                    # self.file_handler.write(x.data)
-                    needs_write = True
-                    removed.append(rel_path)
-                    logger.debug(f'File `{rel_path}` changed')
-                    count[1] += 1
-                else:
-                    logger.debug(f'File `{rel_path}` unchanged')
-                    count[2] += 1
+                if rel_path in processed_rel_paths:
                     continue
-
-                if not needs_write:
-                    continue
-                if self.enable_parts:
-                    # Check if we need a new part (skip if current part is empty)
-                    if self.current_part_offset > 0 and self.current_part_offset + x.length > self.max_part_size:
-                        self.current_part_index += 1
-                        self.current_part_offset = 0
-                        x.offset = 0
-                        part_path = self._part_file_path(
-                            self.current_part_index)
-                        self.file_handlers.append(
-                            self._get_file_handler(part_path))
-                        logger.info(f'Starting new part: {part_path}')
-
-                    x.part_index = self.current_part_index
-                    self.file_handlers[-1].write(x.data)
-                else:
-                    x.part_index = 0
-                    self.file_handlers[0].write(x.data)
-
-                added.append(x.to_dict())
-                self.current_part_offset += x.length
-                total_bytes += x.length
+                handle_file(file_path, rel_path)
 
         for i in self.prev_path_to_hash:
             if i not in path_to_hash:
@@ -495,40 +509,40 @@ def main():
                                              description=('Debundle a file or files with metadata.\n'
                                              '''If the bundle are split into multiple parts, the input bundle files should be named as `<input>_0.cb`, `<input>_1.cb`, ...'''))
     parser_debundle.add_argument(
-        '--input', '-i', type=str, help='The input bundle file to debundle', required=True)
+        '-i', '--input', type=str, help='The input bundle file to debundle', required=True)
     parser_debundle.add_argument(
-        '--metadata', '-m', type=str, help='The metadata JSON file to use', required=True)
+        '-m', '--metadata', type=str, help='The metadata JSON file to use', required=True)
     parser_debundle.add_argument(
-        '--output', '-o', type=str, help='The output directory; it must be empty or absent', default='output')
+        '-o', '--output', type=str, help='The output directory; it must be empty or absent', default='output')
 
-    parser_debundle.add_argument('--verbose', '-V', action='store_true',
+    parser_debundle.add_argument('-V', '--verbose', action='store_true',
                                  help='Enable verbose logging', default=False, dest='verbose_sub')
 
     # bundler
     parser_bundle = sub_parsers.add_parser(
         'bundle', aliases=['b'], help='Bundle a directory', description='Bundle a directory')
     parser_bundle.add_argument(
-        '--input', '-i', type=str, help='The input directory to bundle', required=True)
+        '-i', '--input', type=str, help='The input directory to bundle', required=True)
     parser_bundle.add_argument(
-        '--output', '-o', type=str, help='The output bundle file name; suffix `.cb` is fixed', default='output.cb')
+        '-o', '--output', type=str, help='The output bundle file name; suffix `.cb` is fixed', default='output.cb')
     parser_bundle.add_argument(
-        '--metadata', '-m', type=str, help='The output metadata JSON file name; if not given, it will have the same name with bundle file; suffix `.json` is fixed', default=None)
-    parser_bundle.add_argument('--old_metadata', '-om', type=str,
+        '-m', '--metadata', type=str, help='The output metadata JSON file name; if not given, it will have the same name with bundle file; suffix `.json` is fixed', default=None)
+    parser_bundle.add_argument('-om', '--old_metadata', type=str,
                                help='The old metadata file name for incremental update (path relative to input directory; suffix must be `.oldjson`)', default='metadata')
 
-    parser_bundle.add_argument('--disable_parts', '-dp', action='store_true',
+    parser_bundle.add_argument('-dp', '--disable_parts', action='store_true',
                                help='Disable multi-part bundle splitting', default=False)
     parser_bundle.add_argument('--max_part_size', type=int,
                                help='Max size per bundle part in bytes (default: 104857600 = 100MB)', default=100*1024*1024)
 
-    parser_bundle.add_argument('--app_version', '-av', type=str,
+    parser_bundle.add_argument('-av', '--app_version', type=str,
                                help='The app version to use in metadata', default=None)
-    parser_bundle.add_argument('--bundle_version', '-bv', type=str,
+    parser_bundle.add_argument('-bv', '--bundle_version', type=str,
                                help='The bundle version to use in metadata', default=None)
-    parser_bundle.add_argument('--previous_bundle_version', '-pbv', type=str,
+    parser_bundle.add_argument('-pbv', '--previous_bundle_version', type=str,
                                help='The previous bundle version to use in metadata', default=None)
 
-    parser_bundle.add_argument('--verbose', '-V', action='store_true',
+    parser_bundle.add_argument('-V', '--verbose', action='store_true',
                                help='Enable verbose logging', default=False, dest='verbose_sub')
 
     ns = parser.parse_args()
