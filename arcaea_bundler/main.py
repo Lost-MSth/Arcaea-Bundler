@@ -1,9 +1,9 @@
 import argparse
 import hmac
 import json
-import time
 import logging
 import os
+import time
 from base64 import b64decode, b64encode
 from hashlib import sha256
 from sys import version_info
@@ -372,8 +372,8 @@ class Bundler:
         count = [0, 0, 0, 0]  # 0: added, 1: changed, 2: unchanged, 3: removed
 
         # 确保输出目录存在
-        os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
-        os.makedirs(os.path.dirname(self.output_metadata_file), exist_ok=True)
+        # os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
+        # os.makedirs(os.path.dirname(self.output_metadata_file), exist_ok=True)
 
         # Check first part file doesn't exist
         first_part = self._part_file_path(0)
